@@ -1,6 +1,7 @@
 from mpi4py import MPI
 import numpy as np  
 import time
+import matplotlib.pyplot as plt
 
 def apply_periodic_boundary_conditions(positions, box_size):
     """
@@ -127,6 +128,81 @@ def generate_random_points_in_box_3d(box_size, num_points, min_distance):
             points.append(new_point)
 
     return points
+
+def plot_execution_times_mpi():
+    """
+    MPI version: Plot execution times vs number of particles.
+    Only rank 0 performs timing and plotting.
+    """
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    
+    # LJ parameters for Argon
+    eps_argon = 0.997
+    argon_sigma = 0.34
+    dt = 0.0001  # t-step
+    steps = 100  # of steps (reduced for faster testing)
+
+    base_N = 100
+    base_box = 5.0
+    desired_density = base_N / (base_box ** 3)
+
+    # Different box sizes for testing
+    box_sizes = [5, 6, 7, 8, 9, 10]
+    N_values = []
+    execution_times = []
+
+    for box_size in box_sizes:
+        N = int(round(desired_density * (box_size ** 3)))
+        N_values.append(N)
+        cutoff = box_size * 5 / 12
+        
+        if rank == 0:
+            print(f"Running MPI simulation: box_size={box_size}, N={N}, processes={size}")
+        if rank == 0:
+            positions = np.array(generate_random_points_in_box_3d(box_size, N, 0.4))
+            velocities = np.zeros((N, 3))
+            masses = 40 * np.ones(N)
+        else:
+            positions = None
+            velocities = None
+            masses = None
+        
+        positions = comm.bcast(positions, root=0)
+        velocities = comm.bcast(velocities, root=0)
+        masses = comm.bcast(masses, root=0)
+
+        # Synchronize before timing
+        comm.Barrier()
+        start_time = time.time()
+        
+        final_positions, final_velocities = velocity_verlet(
+            positions, velocities, masses, dt, steps, box_size,
+            epsilon=eps_argon, sigma=argon_sigma, cutoff=cutoff,
+            rank=rank, size=size)
+        
+        comm.Barrier()
+        elapsed_time = time.time() - start_time
+        
+        if rank == 0:
+            execution_times.append(elapsed_time)
+            print(f"--- {elapsed_time} seconds ---\n")
+    
+    # Only rank 0 creates the plot
+    if rank == 0:
+        plt.figure(figsize=(10, 6))
+        plt.plot(N_values, execution_times, 'bo-', markersize=8, linewidth=2)
+        plt.xlabel('Number of particles', fontsize=12)
+        plt.ylabel('Execution time (s)', fontsize=12)
+        plt.title(f'MPI Execution Time vs Number of Particles (processes={size})', fontsize=14)
+        plt.grid(True)
+        plt.tight_layout()
+        
+        filename = f'execution_time_vs_N_mpi_{size}procs.png'
+        plt.savefig(filename)
+        print(f"\nPlot saved as {filename}")
+        plt.show()
 
 def main():
     comm = MPI.COMM_WORLD
